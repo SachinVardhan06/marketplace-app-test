@@ -101,3 +101,35 @@ npm test
 Runs headless against a local mock Marketplace and a mock app backend
 (no network needed). Covers rate limiting, server errors, API outage
 fallback, resume, tab recovery and the lead finder.
+
+## The agent (`npm run agent`)
+
+`npm run agent` launches the two tabs and then hands the wheel to a Claude agent
+(`claude-opus-5-5`). The agent:
+
+- browses and clicks through your own test site to exercise the installed apps,
+- reads the captured traffic and ranks the leads per focus area,
+- writes a precise, safe **manual test plan** for each promising lead
+  (`output/test-plans.json`) — the exact request, one harmless marker or benign
+  check, and what a positive result looks like,
+- drafts Bugcrowd-style reports (`output/reports.json`) for issues you confirm.
+
+The agent explores and proposes; **you run anything that sends data to an app,
+and you decide what to report.** By design it has no tool that fires a payload at
+an app — that keeps it clear of the "automated scanning" that the program bans,
+and keeps the sensitive step in your hands. Its browsing and clicking tools only
+ever act on your own sites, enforced in code (`src/agent/tools.js`).
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run agent -- --goal "look at the Confluence macros app" --oob oob.yoursite.example
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--goal "..."` | What to focus on this run |
+| `--oob HOST` | An out-of-band host you own, used only in SSRF/XXE test plans |
+| `--turns N` | Max agent turns (default 40) |
+
+Without `ANTHROPIC_API_KEY` the agent step is skipped and the rest of the tool
+still works. Set `HUNT_AGENT_MODEL` to use a different model.

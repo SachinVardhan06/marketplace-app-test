@@ -8,10 +8,14 @@
     "hunt": "node src/hunt.js",
     "hunt:headless": "node src/hunt.js --headless",
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "leads": "node src/analyze.js"
+    "leads": "node src/analyze.js",
+    "agent": "node src/hunt-agent.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "playwright": "^1.47.0"
   }
 }
