@@ -75,6 +75,8 @@ A lead is a place to test, not a finding. Re-run it on any capture with
 | `--delay MS` | Pause between requests (min 1000 against the real Marketplace) |
 | `--retries N` | Retries per request (default 5, max 10) |
 | `--resume` | Continue the previous run with the same query |
+| `--account A|B` | Use that test account's own browser profile and tag its traffic |
+| `--profile DIR` | Browser profile directory (overrides `--account`'s default) |
 | `--headless` | Run without a window and exit after recon |
 
 ## Staying in scope
@@ -168,6 +170,52 @@ low-privilege user, both accounts admin, or no project that separates them.
 
 The agent reads this through its `get_baseline` tool and is instructed to
 compare against it before calling anything an access-control finding.
+
+### Replaying a read path as both accounts (`npm run compare`)
+
+Once the baseline tells you what each account should see, this answers the next
+question directly: send the **same** GET as both accounts and see where they
+diverge.
+
+```bash
+npm run compare -- /rest/api/3/project/search
+npm run compare -- /rest/api/3/issue/SECRET-1 /rest/api/3/project/SECRET
+```
+
+Each path gets a verdict:
+
+| verdict | meaning |
+| --- | --- |
+| `ok` | B was denied, or saw nothing, where A saw data — correct behaviour |
+| `partial` | B saw fewer records than A — check those are legitimately B's |
+| `REVIEW` | both accounts got data; if the path is A-only, that is a bypass |
+| `ODD` | B succeeded where A did not |
+
+Deliberate limits: GET only, your configured test sites only, every path given
+explicitly and starting with `/rest/`, at most 50 per run. Nothing is guessed,
+enumerated or fuzzed — take the paths from captured traffic
+(`output/traffic-*.jsonl`) or from the baseline's control pairs, not from a
+wordlist. The output file keeps only a **shape summary** of each response (keys,
+totals, lengths), not anyone's issue data.
+
+A flagged path is not yet a finding. Check it against `output/baseline.json`
+first: B seeing data is only a bypass if the baseline says B should not.
+
+### One profile per account (`--account A|B`)
+
+Signing both test accounts into one browser profile is the easiest way to fake
+a permission bypass — the second login quietly replaces the first, so "account
+B saw it" really means account A did. So each account gets its own profile:
+
+```bash
+npm run hunt:a      # .profile-A, traffic tagged -A
+npm run hunt:b      # .profile-B, traffic tagged -B
+npm run agent:a     # the agent, as account A
+```
+
+Captured traffic and host lists are tagged with the account, so every lead can
+be traced back to the login that saw it. Without `--account` you get the single
+shared `.profile` as before.
 
 ### Credential handling
 

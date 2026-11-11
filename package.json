@@ -10,7 +10,12 @@
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "leads": "node src/analyze.js",
     "agent": "node src/hunt-agent.js",
-    "baseline": "node src/baseline.js"
+    "baseline": "node src/baseline.js",
+    "compare": "node src/compare.js",
+    "hunt:a": "node src/hunt.js --account A",
+    "hunt:b": "node src/hunt.js --account B",
+    "agent:a": "node src/hunt-agent.js --account A",
+    "agent:b": "node src/hunt-agent.js --account B"
   },
   "engines": {
     "node": ">=18"

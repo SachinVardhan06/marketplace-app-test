@@ -80,11 +80,15 @@ async function main(argv = process.argv.slice(2), { installSignalHandlers = requ
   log(`[scope] allowed hosts: ${scope.allowedHosts.join(', ')}`);
   if (!cfg.testSite) log('[env] no testSite set: tab 2 shows instructions. Put your own *.atlassian.net site in config.json');
 
+  // Traffic is tagged with the account it was captured as, so a lead can always be
+  // traced back to which login saw it. Recon is account-independent.
+  const tag = cfg.account ? `${stamp}-${cfg.account}` : stamp;
+  if (cfg.account) log(`[env] running as account ${cfg.account} (profile ${path.relative(ROOT, cfg.profileDir)})`);
   const files = {
     json: path.join(cfg.outDir, `recon-${stamp}.json`),
     csv: path.join(cfg.outDir, `recon-${stamp}.csv`),
-    traffic: path.join(cfg.outDir, `traffic-${stamp}.jsonl`),
-    hosts: path.join(cfg.outDir, `hosts-${stamp}.json`),
+    traffic: path.join(cfg.outDir, `traffic-${tag}.jsonl`),
+    hosts: path.join(cfg.outDir, `hosts-${tag}.json`),
     state: path.join(cfg.outDir, 'state.json'),
   };
 

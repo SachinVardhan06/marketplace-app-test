@@ -99,3 +99,26 @@ test('lead finder sorts traffic into focus areas', () => {
   assert.ok(!JSON.stringify(leads).includes('logo.png'), 'static assets ignored');
   assert.ok(!JSON.stringify(leads).includes('mine.atlassian.net'), 'Atlassian main-frame traffic ignored');
 });
+
+test('--account keeps the two test logins in separate browser profiles', () => {
+  const base = ['--config', '/nonexistent.json'];
+  const quiet = () => {};
+  const a = loadConfig([...base, '--account', 'a'], quiet);
+  const b = loadConfig([...base, '--account', 'B'], quiet);
+  assert.strictEqual(a.account, 'A');
+  assert.strictEqual(b.account, 'B');
+  assert.notStrictEqual(a.profileDir, b.profileDir, 'the two accounts must never share a profile');
+  assert.match(a.profileDir, /\.profile-A$/);
+  assert.match(b.profileDir, /\.profile-B$/);
+
+  // No account given: the single shared profile, as before.
+  const plain = loadConfig(base, quiet);
+  assert.strictEqual(plain.account, null);
+  assert.match(plain.profileDir, /\.profile$/);
+
+  // An explicit --profile still wins, and anything but A or B is refused loudly.
+  assert.strictEqual(loadConfig([...base, '--account', 'A', '--profile', '/tmp/p'], quiet).profileDir, '/tmp/p');
+  const warnings = [];
+  assert.strictEqual(loadConfig([...base, '--account', 'admin'], (m) => warnings.push(m)).account, null);
+  assert.ok(warnings.some((w) => /--account must be A or B/.test(w)));
+});

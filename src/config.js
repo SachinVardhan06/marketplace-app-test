@@ -52,6 +52,16 @@ function num(value, fallback, { min = -Infinity, max = Infinity } = {}, name, wa
   return Math.min(max, Math.max(min, n));
 }
 
+// Which of the two test accounts this run belongs to. Only A and B exist: the
+// baseline, the comparison and the credentials in .env all use those labels.
+function accountLabel(value, warn) {
+  if (value === undefined || value === null || value === '' || value === true) return null;
+  const label = String(value).trim().toUpperCase();
+  if (label === 'A' || label === 'B') return label;
+  warn(`[config] --account must be A or B (got "${value}"); ignoring it and using the shared profile`);
+  return null;
+}
+
 function validSite(url, warn) {
   if (!url || /YOUR-OWN-(SECOND-)?TEST-SITE/i.test(url)) return null;
   let u;
@@ -98,7 +108,14 @@ function loadConfig(argv, warn = console.warn) {
   cfg.resume = Boolean(args.resume);
   cfg.help = Boolean(args.help);
   cfg.outDir = path.resolve(String(args.out || path.join(ROOT, 'output')));
-  cfg.profileDir = path.resolve(String(args.profile || path.join(ROOT, '.profile')));
+
+  // --account A|B keeps the two test logins in separate browser profiles. Signing
+  // both into one profile is the classic way to fake a permission bypass: the
+  // second login silently replaces the first, so "account B saw it" really means
+  // account A saw it. Separate profiles make that impossible.
+  cfg.account = accountLabel(args.account, warn);
+  const defaultProfile = cfg.account ? path.join(ROOT, `.profile-${cfg.account}`) : path.join(ROOT, '.profile');
+  cfg.profileDir = path.resolve(String(args.profile || defaultProfile));
   return cfg;
 }
 

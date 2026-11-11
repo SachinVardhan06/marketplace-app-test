@@ -1,5 +1,7 @@
 node_modules/
 output/
 .profile/
+.profile-A/
+.profile-B/
 config.json
 .env
