@@ -21,10 +21,12 @@ function hostOf(url) {
   }
 }
 
-function buildScope({ testSite, extraAllowedHosts = [], marketplaceBase }) {
+function buildScope({ testSite, secondTestSite, extraAllowedHosts = [], marketplaceBase }) {
   const allowed = new Set(BASE_ALLOWED);
   const siteHost = testSite ? hostOf(testSite) : null;
   if (siteHost) allowed.add(siteHost);
+  const secondHost = secondTestSite ? hostOf(secondTestSite) : null;
+  if (secondHost) allowed.add(secondHost);
   const mpHost = marketplaceBase ? hostOf(marketplaceBase) : null;
   if (mpHost) allowed.add(mpHost);
   for (const h of extraAllowedHosts) allowed.add(String(h).toLowerCase());
@@ -39,7 +41,7 @@ function buildScope({ testSite, extraAllowedHosts = [], marketplaceBase }) {
     return false;
   }
 
-  return { isAllowed, allowedHosts: [...allowed], siteHost };
+  return { isAllowed, allowedHosts: [...allowed], siteHost, siteHosts: [siteHost, secondHost].filter(Boolean) };
 }
 
 // Blocks top-level (main frame) navigations that leave scope. Sub-resources and
@@ -47,12 +49,13 @@ function buildScope({ testSite, extraAllowedHosts = [], marketplaceBase }) {
 async function enforceScope(context, scope, log) {
   await context.route('**/*', async (route) => {
     const req = route.request();
-    const isTopNav = req.isNavigationRequest() && req.frame() === req.frame().page().mainFrame();
+    let isTopNav = false;
+    try { isTopNav = req.isNavigationRequest() && req.frame() === req.frame().page().mainFrame(); } catch { isTopNav = req.isNavigationRequest(); }
     if (isTopNav && !scope.isAllowed(req.url())) {
       log(`[scope] BLOCKED out-of-scope navigation: ${req.url()}`);
-      return route.abort('blockedbyclient');
+      return route.abort('blockedbyclient').catch(() => {});
     }
-    return route.continue();
+    return route.continue().catch(() => {});
   });
 }
 

@@ -4,64 +4,28 @@
 /*
  * Two-tab Chrome environment for Atlassian Marketplace bug bounty work.
  *
- *   Tab 1 "recon"  - passive recon on public Marketplace listings: finds apps that
- *                    take part in the Marketplace bug bounty and walks their listing pages.
- *   Tab 2 "target" - YOUR OWN Atlassian test site, where you install apps and test them
- *                    by hand. All traffic from this tab is logged so you can review the
- *                    app's endpoints afterwards.
+ *   Tab 1 "recon"  - passive recon on public Marketplace listings: finds apps in the
+ *                    Marketplace bug bounty and walks their listing pages.
+ *   Tab 2 "target" - YOUR OWN Atlassian test site, where you install and test apps by
+ *                    hand. Traffic from this tab (and any other tab you open, except
+ *                    recon) is logged, then sorted into leads per focus area.
  *
- * This tool does not send attack payloads, fuzz, or scan. It only reads public data and
- * records traffic you generate yourself. Testing must follow the program rules on Bugcrowd.
+ * It sends no payloads and does no scanning. It reads public data and records
+ * traffic you generate yourself. Follow the program rules on Bugcrowd.
  */
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
-const { buildScope, enforceScope, hostOf } = require('./scope');
-const { searchApps, sleep } = require('./marketplace');
-
-const ROOT = path.resolve(__dirname, '..');
-const DEFAULT_BASE = 'https://marketplace.atlassian.com';
-
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (!a.startsWith('--')) continue;
-    const key = a.slice(2);
-    const next = argv[i + 1];
-    if (next === undefined || next.startsWith('--')) out[key] = true;
-    else { out[key] = next; i++; }
-  }
-  return out;
-}
-
-function loadConfig(args) {
-  const file = args.config ? path.resolve(args.config) : path.join(ROOT, 'config.json');
-  let cfg = {};
-  if (fs.existsSync(file)) cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const merged = {
-    testSite: null, query: '', hosting: 'cloud', maxApps: 25, bugBountyOnly: true,
-    delayMs: 2000, openListingsInTab: true, extraAllowedHosts: [], ...cfg,
-  };
-  if (args.site) merged.testSite = args.site;
-  if (args.query) merged.query = args.query;
-  if (args.max) merged.maxApps = Number(args.max);
-  if (args.all) merged.bugBountyOnly = false;
-  if (args['no-listings']) merged.openListingsInTab = false;
-  if (args.delay) merged.delayMs = Number(args.delay);
-  merged.headless = Boolean(args.headless);
-  merged.marketplaceBase = args['marketplace-base'] || DEFAULT_BASE;
-  merged.outDir = path.resolve(args.out || path.join(ROOT, 'output'));
-  merged.profileDir = path.resolve(args.profile || path.join(ROOT, '.profile'));
-  // Never go faster than one request per second against real Atlassian hosts.
-  if (merged.marketplaceBase === DEFAULT_BASE) merged.delayMs = Math.max(merged.delayMs, 1000);
-  if (merged.testSite && /YOUR-OWN-TEST-SITE/i.test(merged.testSite)) merged.testSite = null;
-  return merged;
-}
+const { loadConfig, ROOT } = require('./config');
+const { buildScope, enforceScope } = require('./scope');
+const { searchApps } = require('./marketplace');
+const { launchBrowser, TabManager } = require('./browser');
+const { createCapture } = require('./capture');
+const leadFinder = require('./analyze');
+const { sleep } = require('./retry');
 
 function toCsv(rows) {
-  if (rows.length === 0) return '';
+  if (!rows.length) return '';
   const cols = Object.keys(rows[0]);
   const esc = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
@@ -70,123 +34,182 @@ function toCsv(rows) {
   return [cols.join(','), ...rows.map((r) => cols.map((c) => esc(r[c])).join(','))].join('\n') + '\n';
 }
 
-const SENSITIVE = /^(cookie|set-cookie|authorization|x-atlassian-token|proxy-authorization)$/i;
-function redact(headers) {
-  const out = {};
-  for (const [k, v] of Object.entries(headers)) out[k] = SENSITIVE.test(k) ? '[redacted]' : v;
-  return out;
+// Write to a temp file then rename, so a crash never leaves a half-written file.
+function writeAtomic(file, data) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, file);
 }
 
-async function launchChrome(cfg, log) {
-  const opts = { headless: cfg.headless, viewport: null, args: ['--start-maximized'] };
-  try {
-    // Prefer the real Google Chrome if it is installed.
-    const ctx = await chromium.launchPersistentContext(cfg.profileDir, { ...opts, channel: 'chrome' });
-    log('[env] launched Google Chrome');
-    return ctx;
-  } catch {
-    const ctx = await chromium.launchPersistentContext(cfg.profileDir, opts);
-    log('[env] Google Chrome not found, launched Playwright Chromium');
-    return ctx;
-  }
-}
-
-function captureTraffic(page, file, scope, log) {
-  const stream = fs.createWriteStream(file, { flags: 'a' });
-  const hosts = new Map();
-  page.on('response', async (res) => {
-    const req = res.request();
-    const h = hostOf(req.url());
-    if (!h) return;
-    hosts.set(h, (hosts.get(h) || 0) + 1);
-    stream.write(JSON.stringify({
-      t: new Date().toISOString(),
-      method: req.method(),
-      url: req.url(),
-      status: res.status(),
-      type: req.resourceType(),
-      frame: req.frame() === page.mainFrame() ? 'main' : 'iframe',
-      thirdParty: h !== scope.siteHost && !h.endsWith('atlassian.com') && !h.endsWith('atl-paas.net'),
-      requestHeaders: redact(req.headers()),
-    }) + '\n');
-  });
-  return {
-    hosts,
-    close: () => new Promise((r) => stream.end(r)),
+function makeLogger(file) {
+  let stream = null;
+  try { stream = fs.createWriteStream(file, { flags: 'a' }); stream.on('error', () => { stream = null; }); } catch {}
+  const log = (m) => {
+    console.log(m);
+    if (stream) stream.write(`${new Date().toISOString()} ${m}\n`);
   };
+  log.close = () => new Promise((r) => (stream ? stream.end(r) : r()));
+  return log;
 }
 
-async function main(argv = process.argv.slice(2)) {
-  const args = parseArgs(argv);
-  if (args.help) {
+function loadState(cfg) {
+  const file = path.join(cfg.outDir, 'state.json');
+  if (!cfg.resume || !fs.existsSync(file)) return null;
+  try {
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (st.query !== cfg.query || st.hosting !== cfg.hosting || st.bugBountyOnly !== cfg.bugBountyOnly) return null;
+    const apps = JSON.parse(fs.readFileSync(path.join(cfg.outDir, `recon-${st.stamp}.json`), 'utf8'));
+    return { ...st, apps };
+  } catch { return null; }
+}
+
+async function main(argv = process.argv.slice(2), { installSignalHandlers = require.main === module } = {}) {
+  const cfg = loadConfig(argv, (m) => console.warn(m));
+  if (cfg.help) {
     console.log(fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'));
-    return;
+    return { apps: [] };
   }
-  const cfg = loadConfig(args);
   fs.mkdirSync(cfg.outDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const log = (m) => console.log(m);
+
+  const state = loadState(cfg);
+  const stamp = state ? state.stamp : new Date().toISOString().replace(/[:.]/g, '-');
+  const log = makeLogger(path.join(cfg.outDir, `run-${stamp}.log`));
+  if (state) log(`[env] resuming run ${stamp} with ${state.apps.length} app(s) at offset ${state.offset}`);
 
   const scope = buildScope(cfg);
   log(`[scope] allowed hosts: ${scope.allowedHosts.join(', ')}`);
-  if (!cfg.testSite) log('[env] no testSite set: tab 2 stays blank. Put your own *.atlassian.net test site in config.json');
+  if (!cfg.testSite) log('[env] no testSite set: tab 2 shows instructions. Put your own *.atlassian.net site in config.json');
 
-  const context = await launchChrome(cfg, log);
-  await enforceScope(context, scope, log);
-
-  // Tab 1: recon. Tab 2: your own test site.
-  const recon = context.pages()[0] || (await context.newPage());
-  const target = await context.newPage();
-
-  const traffic = captureTraffic(target, path.join(cfg.outDir, `traffic-${stamp}.jsonl`), scope, log);
-  if (cfg.testSite) {
-    await target.goto(cfg.testSite, { waitUntil: 'domcontentloaded' }).catch((e) => log(`[target] ${e.message}`));
-  } else {
-    await target.setContent('<h2>Tab 2: target</h2><p>Set <code>testSite</code> in config.json to your own Atlassian test site.</p>');
-  }
-
-  await recon.bringToFront();
-  await recon.goto(new URL('/', cfg.marketplaceBase).toString(), { waitUntil: 'domcontentloaded' })
-    .catch((e) => log(`[recon] ${e.message}`));
-
-  const apps = await searchApps(context.request, {
-    base: cfg.marketplaceBase, query: cfg.query, hosting: cfg.hosting,
-    maxApps: cfg.maxApps, delayMs: cfg.delayMs, bugBountyOnly: cfg.bugBountyOnly, log,
-  });
-  const jsonFile = path.join(cfg.outDir, `recon-${stamp}.json`);
-  fs.writeFileSync(jsonFile, JSON.stringify(apps, null, 2));
-  fs.writeFileSync(path.join(cfg.outDir, `recon-${stamp}.csv`), toCsv(apps));
-  log(`[recon] ${apps.length} app(s) saved to ${path.relative(ROOT, jsonFile)}`);
-
-  if (cfg.openListingsInTab) {
-    for (const app of apps) {
-      log(`[recon] opening ${app.name} (${app.key})`);
-      await recon.goto(app.listingUrl, { waitUntil: 'domcontentloaded' }).catch((e) => log(`[recon] ${e.message}`));
-      await sleep(cfg.delayMs);
-    }
-  }
-
-  const finish = async () => {
-    await traffic.close();
-    const summary = [...traffic.hosts.entries()].sort((a, b) => b[1] - a[1]);
-    fs.writeFileSync(path.join(cfg.outDir, `hosts-${stamp}.json`), JSON.stringify(Object.fromEntries(summary), null, 2));
-    log(`[target] hosts seen from tab 2: ${summary.map(([h, n]) => `${h}(${n})`).join(', ') || 'none'}`);
+  const files = {
+    json: path.join(cfg.outDir, `recon-${stamp}.json`),
+    csv: path.join(cfg.outDir, `recon-${stamp}.csv`),
+    traffic: path.join(cfg.outDir, `traffic-${stamp}.jsonl`),
+    hosts: path.join(cfg.outDir, `hosts-${stamp}.json`),
+    state: path.join(cfg.outDir, 'state.json'),
   };
 
-  if (cfg.headless) {
-    await finish();
-    await context.close();
-    return { apps };
+  let apps = state ? state.apps : [];
+  let lastOffset = state ? state.offset : 0;
+  let tabs = null;
+  const saveRecon = (offset = lastOffset) => {
+    lastOffset = offset;
+    try {
+      writeAtomic(files.json, JSON.stringify(apps, null, 2));
+      writeAtomic(files.csv, toCsv(apps));
+      writeAtomic(files.state, JSON.stringify({ stamp, offset, query: cfg.query, hosting: cfg.hosting, bugBountyOnly: cfg.bugBountyOnly }, null, 2));
+    } catch (e) { log(`[recon] could not save results: ${e.message}`); }
+  };
+
+  const capture = createCapture(files.traffic, { siteHosts: scope.siteHosts, log });
+
+  let context;
+  let finished = null;
+  const finish = (reason) => {
+    if (finished) return finished;
+    finished = (async () => {
+      log(`[env] shutting down (${reason})`);
+      if (tabs) tabs.stopping = true;
+      saveRecon();
+      await capture.close();
+      try {
+        const summary = [...capture.hosts.entries()].sort((a, b) => b[1] - a[1]);
+        writeAtomic(files.hosts, JSON.stringify(Object.fromEntries(summary), null, 2));
+        log(`[target] hosts seen: ${summary.slice(0, 15).map(([h, n]) => `${h}(${n})`).join(', ') || 'none'}`);
+        if (fs.existsSync(files.traffic) && fs.statSync(files.traffic).size > 0) {
+          const r = leadFinder.run(files.traffic, cfg.outDir);
+          log(`[leads] ${r.counts}`);
+          log(`[leads] written to ${path.relative(ROOT, r.file)}`);
+        }
+      } catch (e) { log(`[leads] could not analyse traffic: ${e.message}`); }
+      if (context) await context.close().catch(() => {});
+      log(`[recon] ${apps.length} app(s) in ${path.relative(ROOT, files.json)}`);
+      await log.close();
+    })();
+    return finished;
+  };
+
+  const handlers = [];
+  if (installSignalHandlers) {
+    const onSignal = (sig) => () => { finish(sig).then(() => process.exit(0)); };
+    const onRejection = (e) => log(`[error] unhandled: ${e && e.message ? e.message : e}`);
+    const onException = (e) => { log(`[error] fatal: ${e.stack || e}`); finish('fatal error').then(() => process.exit(1)); };
+    handlers.push(['SIGINT', onSignal('Ctrl+C')], ['SIGTERM', onSignal('SIGTERM')], ['unhandledRejection', onRejection], ['uncaughtException', onException]);
+    for (const [ev, fn] of handlers) process.on(ev, fn);
   }
 
-  log('[env] Both tabs are open. Test by hand in tab 2; close the browser window when done.');
-  await new Promise((resolve) => context.on('close', resolve));
-  await finish();
-  return { apps };
+  try {
+    context = await launchBrowser(cfg, log);
+    await enforceScope(context, scope, log);
+
+    tabs = new TabManager(context, {
+      log, navTimeoutMs: cfg.navTimeoutMs, retries: cfg.retries,
+      onNewPage: (name, page) => { if (name !== 'recon') capture.attach(page); },
+    });
+    // Any tab you open yourself (e.g. your second test site) is captured too.
+    context.on('page', (p) => {
+      const recon = tabs.tabs.get('recon');
+      if (!recon || recon.page !== p) capture.attach(p);
+    });
+    context.on('close', () => { tabs.contextClosed = true; });
+
+    const firstPage = context.pages()[0];
+    await tabs.open('recon', `${cfg.marketplaceBase}/`, { reuse: firstPage });
+    if (cfg.testSite) {
+      await tabs.open('target', cfg.testSite);
+    } else {
+      const page = await context.newPage();
+      capture.attach(page);
+      await page.setContent('<h2>Tab 2: target</h2><p>Set <code>testSite</code> in config.json to your own Atlassian test site, then restart.</p>');
+    }
+    (await tabs.page('recon')).bringToFront().catch(() => {});
+
+    const seen = new Set(apps.map((a) => a.key));
+    const res = await searchApps(context.request, () => tabs.page('recon'), {
+      base: cfg.marketplaceBase, query: cfg.query, hosting: cfg.hosting, maxApps: Math.max(0, cfg.maxApps - apps.length),
+      delayMs: cfg.delayMs, bugBountyOnly: cfg.bugBountyOnly, retries: cfg.retries, navTimeoutMs: cfg.navTimeoutMs,
+      startOffset: state ? state.offset : 0, seen, log,
+      onPage: ({ apps: found, offset }) => { apps = [...(state ? state.apps : []), ...found]; saveRecon(offset); },
+    });
+    apps = [...(state ? state.apps : []), ...res.apps];
+    saveRecon(res.offset);
+    log(`[recon] ${apps.length} app(s) saved to ${path.relative(ROOT, files.json)}`);
+
+    if (cfg.openListingsInTab) {
+      for (const app of apps) {
+        if (finished || tabs.contextClosed) break;
+        log(`[recon] opening ${app.name} (${app.key})`);
+        await tabs.goto('recon', app.listingUrl);
+        await sleep(cfg.delayMs);
+      }
+    }
+
+    if (cfg.headless && cfg.testSite && !finished) {
+      // Give the target page's own requests time to finish before closing.
+      const target = await tabs.page('target').catch(() => null);
+      if (target) await target.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    }
+
+    if (!cfg.headless && !finished && !tabs.contextClosed) {
+      log('[env] Both tabs are open. Test by hand in tab 2; close the browser window or press Ctrl+C when done.');
+      await new Promise((resolve) => {
+        if (tabs.contextClosed) return resolve();
+        context.on('close', resolve);
+      });
+    }
+  } catch (e) {
+    log(`[error] ${e.message}`);
+    await finish('error');
+    for (const [ev, fn] of handlers) process.off(ev, fn);
+    throw e;
+  }
+
+  await finish(cfg.headless ? 'headless run complete' : 'browser closed');
+  for (const [ev, fn] of handlers) process.off(ev, fn);
+  return { apps, files };
 }
 
 if (require.main === module) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+  main().catch(() => process.exit(1));
 }
 
-module.exports = { main, parseArgs, loadConfig, toCsv, redact };
+module.exports = { main, toCsv, writeAtomic };
