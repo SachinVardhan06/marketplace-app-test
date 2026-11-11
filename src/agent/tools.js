@@ -31,6 +31,11 @@ const TOOL_DEFS = [
     },
   },
   {
+    name: 'get_baseline',
+    description: "The permission baseline for the researcher's own test accounts, from Jira's own API: what each account can legitimately see, and the control pairs (projects one account can see and the other cannot). Use it to judge whether the app showed an account more than Jira itself would. Run `npm run baseline` first if it is missing.",
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'browse',
     description: "Open a URL on one of the researcher's own test sites in the target tab and return the page (title, visible text, links, forms, app iframes). Only the researcher's own sites are allowed.",
     input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
@@ -158,6 +163,26 @@ function createTools(env) {
         .slice(-limit).reverse()
         .map((e) => ({ method: e.method, url: e.url, host: e.host, status: e.status, type: e.type, thirdParty: e.thirdParty, params: e.params, reflectedParams: e.reflectedParams, cors: e.cors, postData: e.postData ? e.postData.slice(0, 800) : null }));
       return rows.length ? json(rows) : 'No matching requests.';
+    },
+
+    async get_baseline() {
+      const file = path.join(outDir, 'baseline.json');
+      if (!fs.existsSync(file)) return 'No baseline yet. The researcher needs to run `npm run baseline` with both test accounts configured.';
+      const b = JSON.parse(fs.readFileSync(file, 'utf8'));
+      // Trim to what matters for judging a finding: who is who, and the control pairs.
+      return json({
+        builtAt: b.builtAt,
+        readiness: b.readiness,
+        sites: (b.sites || []).map((s) => ({
+          host: s.host,
+          accounts: (s.accounts || []).map((a) => ({
+            account: a.account, role: a.role, displayName: a.displayName, accountId: a.accountId,
+            isJiraAdmin: a.isJiraAdmin, projects: a.projects.map((p) => p.key), projectIssueCounts: a.projectIssueCounts,
+          })),
+          controlPairs: s.diff ? s.diff.controlPairs : [],
+          sharedProjectsWithDifferentVisibleCounts: s.diff ? s.diff.sharedProjectsWithDifferentVisibleCounts : [],
+        })),
+      });
     },
 
     async browse({ url }) {

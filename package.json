@@ -9,7 +9,8 @@
     "hunt:headless": "node src/hunt.js --headless",
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "leads": "node src/analyze.js",
-    "agent": "node src/hunt-agent.js"
+    "agent": "node src/hunt-agent.js",
+    "baseline": "node src/baseline.js"
   },
   "engines": {
     "node": ">=18"

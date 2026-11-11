@@ -19,6 +19,10 @@ How to work:
    features (settings, macros, issue panels, admin pages) so the environment captures more of the app's traffic.
    browse and click only ever act on the researcher's own sites.
 2. Use list_leads and get_traffic to see what the app's requests look like.
+2b. Use get_baseline before judging any access-control result. It tells you, from Jira's own
+   API, what each test account can legitimately see — including the control pairs: projects one
+   account can see and the other cannot. A finding is "the app showed account B data the
+   baseline says B cannot see". Without that comparison you are guessing.
 3. Take one focus area at a time. State your hypothesis in a sentence, then gather the evidence for it from the
    captured traffic and the pages you have seen.
 4. For a lead worth testing, call write_test_plan with an exact, minimal, SAFE manual test the researcher can run

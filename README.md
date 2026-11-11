@@ -133,3 +133,47 @@ npm run agent -- --goal "look at the Confluence macros app" --oob oob.yoursite.e
 
 Without `ANTHROPIC_API_KEY` the agent step is skipped and the rest of the tool
 still works. Set `HUNT_AGENT_MODEL` to use a different model.
+
+## Two test accounts and the permission baseline
+
+The access-control tests all ask the same question: **did the app show this
+account something Jira itself would not?** You cannot answer that without
+knowing what Jira itself shows, so the tool establishes that first.
+
+Create an API token for each of two accounts on your own test site — one Jira
+admin, one deliberately low-privilege — at
+https://id.atlassian.com/manage-profile/security/api-tokens, then:
+
+```bash
+cp .env.example .env     # fill it in; .env is gitignored
+npm run baseline
+```
+
+That writes `output/baseline.json`: per site and per account, the account id,
+whether it is a Jira admin, which projects it can see, and how many issues it
+can see in each. The valuable part is the **control pairs** — projects one
+account can see and the other cannot:
+
+```json
+{ "projectKey": "SECRET", "visibleTo": "A", "hiddenFrom": "B",
+  "issueCountForVisibleAccount": 7, "expectedForHiddenAccount": 0 }
+```
+
+That is the assertion to point the app tests at. If the app ever shows account B
+data from `SECRET`, the baseline is your evidence that B should have seen
+nothing — which is the difference between a finding and a hunch.
+
+`npm run baseline` also reports what is still missing: only one account, no
+low-privilege user, both accounts admin, or no project that separates them.
+
+The agent reads this through its `get_baseline` tool and is instructed to
+compare against it before calling anything an access-control finding.
+
+### Credential handling
+
+- Tokens are read only from `.env` or the environment — never from
+  `config.json`, never from an argument, never committed. `.env` is gitignored.
+- They are stripped from anything written to disk (`redactSecrets`).
+- The client is **GET-only by construction** — any other method throws, so it
+  cannot write to your Jira — and it refuses any host that is not one of your
+  configured test sites. Both are enforced in code and covered by tests.
