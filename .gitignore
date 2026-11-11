@@ -1,0 +1,4 @@
+node_modules/
+output/
+.profile/
+config.json

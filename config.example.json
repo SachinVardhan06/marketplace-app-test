@@ -1,0 +1,10 @@
+{
+  "testSite": "https://YOUR-OWN-TEST-SITE.atlassian.net",
+  "query": "",
+  "hosting": "cloud",
+  "maxApps": 25,
+  "bugBountyOnly": true,
+  "delayMs": 2000,
+  "openListingsInTab": true,
+  "extraAllowedHosts": []
+}
