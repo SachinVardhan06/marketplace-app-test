@@ -151,6 +151,12 @@ cp .env.example .env     # fill it in; .env is gitignored
 npm run baseline
 ```
 
+The baseline needs **no `npm install`**: its whole dependency graph is Node
+builtins plus global `fetch`, so `node src/baseline.js` works in a bare clone on
+Node 18+. `node_modules` is only for the browser runner and the agent. The same
+goes for `npm run compare` and for `node --test test/atlassian.test.js
+test/compare.test.js`.
+
 That writes `output/baseline.json`: per site and per account, the account id,
 whether it is a Jira admin, which projects it can see, and how many issues it
 can see in each. The valuable part is the **control pairs** — projects one
