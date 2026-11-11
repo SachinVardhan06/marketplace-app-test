@@ -8,19 +8,27 @@ const { withRetry, HttpError, parseRetryAfter, sleep } = require('./retry');
 
 const MAX_CAP = 200;
 
-function bugBountyStatus(addon) {
-  // The programs block has changed shape over time, so look for any marker.
+// The real shape is programs.bugBountyParticipant.<hosting>.status === 'approved'.
+// Searching the block for the text "bugbounty" is wrong: the block is present,
+// with "not-a-participant", for apps that take no part at all — so every app
+// came back marked as a participant. Participation is per hosting type, and a
+// Bugcrowd target is per hosting type too, so check the one we searched for.
+const HOSTING_KEYS = { cloud: 'cloud', server: 'server', datacenter: 'dataCenter' };
+
+function bugBountyStatus(addon, hosting) {
   const programs = addon.programs || (addon._embedded && addon._embedded.programs);
-  if (!programs) return false;
-  const text = JSON.stringify(programs).toLowerCase();
-  return /bug[\s_-]?bounty/.test(text);
+  const participant = programs && programs.bugBountyParticipant;
+  if (!participant || typeof participant !== 'object') return false;
+  const key = hosting ? HOSTING_KEYS[String(hosting).toLowerCase().replace(/[^a-z]/g, '')] : null;
+  const keys = key ? [key] : Object.keys(participant);
+  return keys.some((k) => participant[k] && participant[k].status === 'approved');
 }
 
 function safeUrl(href, base, fallback) {
   try { return new URL(href, base).toString(); } catch { return fallback; }
 }
 
-function normalise(addon, base) {
+function normalise(addon, base, hosting) {
   const e = addon._embedded || {};
   const alt = addon._links && addon._links.alternate && addon._links.alternate.href;
   const fallback = `${base}/apps/${encodeURIComponent(addon.key || '')}`;
@@ -32,7 +40,7 @@ function normalise(addon, base) {
     hosting: addon.hosting || null,
     totalInstalls: (e.distribution && (e.distribution.totalInstalls ?? e.distribution.downloads)) ?? null,
     averageStars: (e.reviews && e.reviews.averageStars) ?? null,
-    bugBountyParticipant: bugBountyStatus(addon),
+    bugBountyParticipant: bugBountyStatus(addon, hosting),
     listingUrl: alt ? safeUrl(alt, base, fallback) : fallback,
     source: 'api',
   };
@@ -72,7 +80,7 @@ async function searchApi(request, opts) {
       consumed++;
       if (!a || typeof a !== 'object') continue;
       let app;
-      try { app = normalise(a, base); } catch (e) { log(`[recon] skipped malformed app: ${e.message}`); continue; }
+      try { app = normalise(a, base, hosting); } catch (e) { log(`[recon] skipped malformed app: ${e.message}`); continue; }
       if (!app.key || seen.has(app.key)) continue;
       if (bugBountyOnly && !app.bugBountyParticipant) continue;
       seen.add(app.key);

@@ -57,8 +57,21 @@ test('config survives bad values and refuses unsafe settings', () => {
 });
 
 test('normalise copes with odd API shapes', () => {
-  assert.strictEqual(bugBountyStatus({ programs: { bugBountyParticipant: {} } }), true);
+  const approvedCloud = { programs: { bugBountyParticipant: { cloud: { status: 'approved' }, server: { status: 'not-a-participant' }, dataCenter: { status: 'not-a-participant' } } } };
+  const noneApproved = { programs: { bugBountyParticipant: { cloud: { status: 'not-a-participant' }, server: { status: 'not-a-participant' } } } };
+  assert.strictEqual(bugBountyStatus(approvedCloud, 'cloud'), true);
+  // Regression: the block is present for non-participants, so a text match on
+  // "bugbounty" marked every app as a participant.
+  assert.strictEqual(bugBountyStatus(noneApproved, 'cloud'), false);
+  assert.strictEqual(bugBountyStatus(noneApproved), false);
+  assert.strictEqual(bugBountyStatus({ programs: { bugBountyParticipant: {} } }), false);
+  // Participation is per hosting type, and so is a Bugcrowd target.
+  assert.strictEqual(bugBountyStatus(approvedCloud, 'server'), false);
+  assert.strictEqual(bugBountyStatus(approvedCloud, 'dataCenter'), false);
+  assert.strictEqual(bugBountyStatus(approvedCloud), true, 'no hosting given: any approved counts');
   assert.strictEqual(bugBountyStatus({}), false);
+  assert.strictEqual(normalise(approvedCloud, 'https://m', 'cloud').bugBountyParticipant, true);
+  assert.strictEqual(normalise(noneApproved, 'https://m', 'cloud').bugBountyParticipant, false);
   const a = normalise({ key: 'k' }, 'https://m');
   assert.strictEqual(a.listingUrl, 'https://m/apps/k');
   assert.strictEqual(a.name, 'k');

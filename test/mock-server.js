@@ -6,6 +6,12 @@ const ADDONS = [
     programs: { bugBountyParticipant: { cloud: { status: 'approved' } } },
     _links: { alternate: { href: '/apps/1/bounty-app' } },
     _embedded: { vendor: { name: 'Example Vendor' }, distribution: { totalInstalls: 1200 }, reviews: { averageStars: 3.8 } } },
+  // Has a programs block but takes no part on any hosting — the shape that a
+  // text match on "bugbounty" wrongly counted as a participant.
+  { key: 'com.example.declined-app', name: 'Declined App', summary: 'Programs block, no participation', hosting: 'cloud',
+    programs: { bugBountyParticipant: { cloud: { status: 'not-a-participant' }, server: { status: 'not-a-participant' } } },
+    _links: { alternate: { href: '/apps/3/declined-app' } },
+    _embedded: { vendor: { name: 'Declined Ltd' }, distribution: { totalInstalls: 7 }, reviews: { averageStars: 2.0 } } },
   { key: 'com.example.plain-app', name: 'Plain App', summary: 'Not in program', hosting: 'cloud',
     _links: { alternate: { href: '/apps/2/plain-app' } },
     _embedded: { vendor: { name: 'Other, Inc' }, distribution: { totalInstalls: 50 }, reviews: { averageStars: 4.5 } } },

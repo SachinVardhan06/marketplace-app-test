@@ -62,7 +62,7 @@ test('resume continues where the last run stopped', async () => {
     const i = args.indexOf('--max');
     args[i + 1] = '5';
     const second = await main([...args, '--resume']);
-    assert.deepStrictEqual(second.apps.map((a) => a.key), ['com.example.bounty-app', 'com.example.plain-app']);
+    assert.deepStrictEqual(second.apps.map((a) => a.key), ['com.example.bounty-app', 'com.example.declined-app', 'com.example.plain-app']);
     assert.strictEqual(path.basename(second.files.json), path.basename(first.files.json));
   } finally { restore(); server.close(); }
 });
