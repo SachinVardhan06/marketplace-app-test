@@ -25,6 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const { withRetry, HttpError, parseRetryAfter, sleep } = require('./retry');
 const { hostOf } = require('./scope');
+const { loadDotEnv } = require('./dotenv');
 
 const PERMISSIONS_OF_INTEREST = [
   'ADMINISTER',
@@ -35,26 +36,32 @@ const PERMISSIONS_OF_INTEREST = [
   'MANAGE_SPRINTS_PERMISSION',
 ];
 
-// Minimal .env reader: KEY=value lines, # comments, optional quotes. No deps.
-function loadDotEnv(file) {
-  if (!fs.existsSync(file)) return {};
-  const out = {};
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!m) continue;
-    let v = m[2].trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-    out[m[1]] = v;
-  }
-  return out;
-}
-
 function readCredentials(root = path.resolve(__dirname, '..'), env = process.env) {
   const file = loadDotEnv(path.join(root, '.env'));
-  const pick = (k) => env[k] || file[k];
+  // The real environment wins over the file; the first name that is set wins
+  // among the aliases. ACCOUNT_A_* / ACCOUNT_B_* are accepted because that is
+  // the obvious thing to write, and a token typed under a name the code ignores
+  // looks exactly like a credential problem.
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = env[k] || file[k];
+      if (v) return v;
+    }
+    return undefined;
+  };
   const accounts = [];
-  const a = { label: 'A', role: 'admin', email: pick('ATLASSIAN_EMAIL'), token: pick('ATLASSIAN_API_TOKEN') };
-  const b = { label: 'B', role: 'lowpriv', email: pick('ATLASSIAN_EMAIL_B'), token: pick('ATLASSIAN_API_TOKEN_B') };
+  const a = {
+    label: 'A',
+    role: 'admin',
+    email: pick('ATLASSIAN_EMAIL', 'ATLASSIAN_EMAIL_A', 'ACCOUNT_A_EMAIL'),
+    token: pick('ATLASSIAN_API_TOKEN', 'ATLASSIAN_API_TOKEN_A', 'ACCOUNT_A_TOKEN'),
+  };
+  const b = {
+    label: 'B',
+    role: 'lowpriv',
+    email: pick('ATLASSIAN_EMAIL_B', 'ACCOUNT_B_EMAIL'),
+    token: pick('ATLASSIAN_API_TOKEN_B', 'ACCOUNT_B_TOKEN'),
+  };
   for (const acct of [a, b]) if (acct.email && acct.token) accounts.push(acct);
   return accounts;
 }

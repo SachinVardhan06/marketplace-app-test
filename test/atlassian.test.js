@@ -142,3 +142,33 @@ test('readiness says what is still missing before testing can start', () => {
   assert.ok(notReady.some((n) => /low-privilege/.test(n)));
   assert.ok(notReady.some((n) => /no project is visible to one account and hidden/.test(n)));
 });
+
+test('credentials are found under the obvious alternative names too', () => {
+  const root = tmp('creds-alias-');
+  // Someone filling this in by hand reaches for ACCOUNT_A_*; a token typed under
+  // a name the code ignores is indistinguishable from a broken token.
+  fs.writeFileSync(path.join(root, '.env'), [
+    'HUNT_SITE=https://mine.atlassian.net',
+    'ACCOUNT_A_EMAIL=a@example.com',
+    'ACCOUNT_A_TOKEN=tok-a',
+    'ACCOUNT_B_EMAIL=b@example.com',
+    'ACCOUNT_B_TOKEN=tok-b',
+  ].join('\n'));
+  const accounts = readCredentials(root, {});
+  assert.deepStrictEqual(accounts.map((a) => [a.label, a.role, a.email, a.token]), [
+    ['A', 'admin', 'a@example.com', 'tok-a'],
+    ['B', 'lowpriv', 'b@example.com', 'tok-b'],
+  ]);
+
+  // The canonical names still win where both are present.
+  fs.writeFileSync(path.join(root, '.env'), [
+    'ATLASSIAN_EMAIL=canonical@example.com',
+    'ATLASSIAN_API_TOKEN=tok-canonical',
+    'ACCOUNT_A_EMAIL=alias@example.com',
+    'ACCOUNT_A_TOKEN=tok-alias',
+  ].join('\n'));
+  assert.deepStrictEqual(
+    [readCredentials(root, {})[0].email, readCredentials(root, {})[0].token],
+    ['canonical@example.com', 'tok-canonical'],
+  );
+});

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { loadDotEnv } = require('./dotenv');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_BASE = 'https://marketplace.atlassian.com';
@@ -80,6 +81,13 @@ function loadConfig(argv, warn = console.warn) {
   const args = parseArgs(argv);
   const file = args.config ? path.resolve(String(args.config)) : path.join(ROOT, 'config.json');
   const cfg = { ...DEFAULTS, ...readConfigFile(file, warn) };
+
+  // The site may also come from .env (HUNT_SITE / HUNT_SECOND_SITE), beside the
+  // credentials. config.json wins, then the flag; this is only a fallback so a
+  // site typed in the one file the researcher already edits is not ignored.
+  const envCfg = { ...loadDotEnv(path.join(ROOT, '.env')), ...process.env };
+  if (!cfg.testSite && envCfg.HUNT_SITE) cfg.testSite = String(envCfg.HUNT_SITE);
+  if (!cfg.secondTestSite && envCfg.HUNT_SECOND_SITE) cfg.secondTestSite = String(envCfg.HUNT_SECOND_SITE);
 
   if (args.site) cfg.testSite = String(args.site);
   if (args['second-site']) cfg.secondTestSite = String(args['second-site']);
